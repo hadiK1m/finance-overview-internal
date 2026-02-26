@@ -5,7 +5,7 @@ import { inArray, eq, sql } from "drizzle-orm";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import path from "path";
 import { db } from "@/db";
-import { transactions, transactionItems, balanceSheets } from "@/db/schema";
+import { transactions, transactionItems, balanceSheets, items, rkapNames } from "@/db/schema";
 import {
     addTransactionSchema,
     editTransactionSchema,
@@ -345,4 +345,306 @@ export async function editTransactionAction(
             error: "Terjadi kesalahan saat mengubah data.",
         };
     }
+}
+
+/* ══════════════════════════════════════════════
+   Import CSV — Bulk insert transactions
+   ──────────────────────────────────────────────
+   CSV columns (header row required):
+   tanggal, rkap, items, penerima, jumlah, tipe, sumber_dana
+   
+   • tanggal     : DD/MM/YYYY or YYYY-MM-DD
+   • rkap        : Nama RKAP (exact match)
+   • items       : Nama item — pisahkan multiple dengan ";"
+   • penerima    : Nama penerima
+   • jumlah      : Angka (tanpa titik/koma ribuan)
+   • tipe        : "income" atau "expense"
+   • sumber_dana : Nama akun / sumber dana (exact match)
+   ══════════════════════════════════════════════ */
+
+export type ImportResult =
+    | { success: true; error: null; imported: number; skipped: number; errors: string[] }
+    | { success: false; error: string; imported?: undefined; skipped?: undefined; errors?: string[] };
+
+export async function importTransactionsCsvAction(
+    formData: FormData,
+): Promise<ImportResult> {
+    try {
+        const user = await requirePermission("create");
+
+        const file = formData.get("csv") as File | null;
+        if (!file || file.size === 0) {
+            return { success: false, error: "Tidak ada file CSV yang dipilih." };
+        }
+
+        // Validate type
+        const validTypes = ["text/csv", "application/vnd.ms-excel", "text/plain"];
+        if (!validTypes.includes(file.type) && !file.name.endsWith(".csv")) {
+            return { success: false, error: "File harus berformat CSV." };
+        }
+
+        // Max 2 MB for CSV
+        if (file.size > 2 * 1024 * 1024) {
+            return { success: false, error: "Ukuran CSV maksimal 2 MB." };
+        }
+
+        const text = await file.text();
+        const lines = text
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter((l) => l.length > 0);
+
+        if (lines.length < 2) {
+            return { success: false, error: "CSV kosong atau hanya berisi header." };
+        }
+
+        // Auto-detect delimiter (semicolon or comma)
+        const firstLine = lines[0];
+        const delimiter = firstLine.includes(";") ? ";" : ",";
+
+        // Parse header
+        const header = firstLine.toLowerCase().split(delimiter).map((h) => h.trim());
+        const requiredCols = ["tanggal", "rkap", "items", "penerima", "jumlah", "tipe", "sumber_dana"];
+        const missing = requiredCols.filter((c) => !header.includes(c));
+        if (missing.length > 0) {
+            return {
+                success: false,
+                error: `Kolom wajib tidak ditemukan: ${missing.join(", ")}. Pastikan header CSV sesuai template.`,
+            };
+        }
+
+        const colIdx = Object.fromEntries(header.map((h, i) => [h, i]));
+
+        // Pre-fetch lookup maps (name → id) for RKAP, items, accounts
+        const allRkap = await db.select({ id: rkapNames.id, name: rkapNames.name }).from(rkapNames);
+        const rkapMap = new Map(allRkap.map((r) => [r.name.toLowerCase(), r.id]));
+
+        const allItems = await db.select({ id: items.id, name: items.name }).from(items);
+        const itemMap = new Map(allItems.map((i) => [i.name.toLowerCase(), i.id]));
+
+        const allAccounts = await db.select({ name: balanceSheets.name }).from(balanceSheets);
+        const accountSet = new Set(allAccounts.map((a) => a.name.toLowerCase()));
+
+        // Parse data rows
+        const rowErrors: string[] = [];
+        const validRows: {
+            date: Date;
+            rkapId: string;
+            itemIds: string[];
+            recipientName: string;
+            amount: number;
+            type: "income" | "expense";
+            accountName: string;
+        }[] = [];
+
+        for (let i = 1; i < lines.length; i++) {
+            const rowNum = i + 1;
+            const cols = parseCsvLine(lines[i], delimiter);
+
+            if (cols.length < header.length) {
+                rowErrors.push(`Baris ${rowNum}: Jumlah kolom tidak sesuai (${cols.length}/${header.length})`);
+                continue;
+            }
+
+            const rawDate = cols[colIdx.tanggal].trim();
+            const rawRkap = cols[colIdx.rkap].trim();
+            const rawItems = cols[colIdx.items].trim();
+            const rawPenerima = cols[colIdx.penerima].trim();
+            const rawJumlah = cols[colIdx.jumlah].trim();
+            const rawTipe = cols[colIdx.tipe].trim().toLowerCase();
+            const rawSumberDana = cols[colIdx.sumber_dana].trim();
+
+            // Validate date (DD/MM/YYYY or YYYY-MM-DD)
+            const parsedDate = parseFlexibleDate(rawDate);
+            if (!parsedDate) {
+                rowErrors.push(`Baris ${rowNum}: Format tanggal tidak valid "${rawDate}". Gunakan DD/MM/YYYY atau YYYY-MM-DD.`);
+                continue;
+            }
+
+            // Validate RKAP
+            const rkapId = rkapMap.get(rawRkap.toLowerCase());
+            if (!rkapId) {
+                rowErrors.push(`Baris ${rowNum}: RKAP "${rawRkap}" tidak ditemukan di database.`);
+                continue;
+            }
+
+            // Validate items
+            const itemNames = rawItems.split(";").map((n) => n.trim()).filter(Boolean);
+            if (itemNames.length === 0) {
+                rowErrors.push(`Baris ${rowNum}: Minimal satu item harus diisi.`);
+                continue;
+            }
+            const itemIds: string[] = [];
+            let itemError = false;
+            for (const name of itemNames) {
+                const itemId = itemMap.get(name.toLowerCase());
+                if (!itemId) {
+                    rowErrors.push(`Baris ${rowNum}: Item "${name}" tidak ditemukan di database.`);
+                    itemError = true;
+                    break;
+                }
+                itemIds.push(itemId);
+            }
+            if (itemError) continue;
+
+            // Validate penerima
+            if (!rawPenerima) {
+                rowErrors.push(`Baris ${rowNum}: Nama penerima wajib diisi.`);
+                continue;
+            }
+
+            // Validate jumlah — strip dots/commas used as thousand separators
+            const cleanedAmount = rawJumlah.replace(/\./g, "").replace(",", ".");
+            const amount = parseFloat(cleanedAmount);
+            if (isNaN(amount) || amount < 0) {
+                rowErrors.push(`Baris ${rowNum}: Jumlah "${rawJumlah}" tidak valid.`);
+                continue;
+            }
+
+            // Validate tipe (support Indonesian aliases)
+            const tipeMap: Record<string, "income" | "expense"> = {
+                income: "income",
+                expense: "expense",
+                pemasukan: "income",
+                pengeluaran: "expense",
+            };
+            const mappedTipe = tipeMap[rawTipe];
+            if (!mappedTipe) {
+                rowErrors.push(`Baris ${rowNum}: Tipe "${rawTipe}" tidak valid. Gunakan "income"/"pemasukan" atau "expense"/"pengeluaran".`);
+                continue;
+            }
+
+            // Validate sumber dana
+            if (!accountSet.has(rawSumberDana.toLowerCase())) {
+                rowErrors.push(`Baris ${rowNum}: Sumber Dana "${rawSumberDana}" tidak ditemukan di database.`);
+                continue;
+            }
+
+            validRows.push({
+                date: parsedDate,
+                rkapId,
+                itemIds,
+                recipientName: rawPenerima,
+                amount,
+                type: mappedTipe,
+                accountName: rawSumberDana,
+            });
+        }
+
+        if (validRows.length === 0) {
+            return {
+                success: false,
+                error: "Tidak ada data valid untuk diimport.",
+                errors: rowErrors,
+            };
+        }
+
+        // Insert in a single DB transaction
+        await db.transaction(async (trx) => {
+            for (const row of validRows) {
+                const [tx] = await trx
+                    .insert(transactions)
+                    .values({
+                        date: row.date,
+                        rkapId: row.rkapId,
+                        recipientName: row.recipientName,
+                        amount: String(row.amount),
+                        type: row.type,
+                        accountName: row.accountName,
+                        createdBy: user.userId,
+                    })
+                    .returning();
+
+                // Insert transaction items
+                if (row.itemIds.length > 0) {
+                    await trx.insert(transactionItems).values(
+                        row.itemIds.map((itemId) => ({
+                            transactionId: tx.id,
+                            itemId,
+                        })),
+                    );
+                }
+
+                // Adjust balance sheet
+                const isAdd = row.type === "income";
+                await trx
+                    .update(balanceSheets)
+                    .set({
+                        balance: isAdd
+                            ? sql`${balanceSheets.balance} + ${String(row.amount)}`
+                            : sql`${balanceSheets.balance} - ${String(row.amount)}`,
+                    })
+                    .where(eq(balanceSheets.name, row.accountName));
+            }
+        });
+
+        revalidatePath("/transactions");
+        revalidatePath("/cash-balance");
+
+        return {
+            success: true,
+            error: null,
+            imported: validRows.length,
+            skipped: rowErrors.length,
+            errors: rowErrors,
+        };
+    } catch (error) {
+        console.error("[importTransactionsCsvAction] Error:", error);
+        return { success: false, error: "Terjadi kesalahan saat mengimport data." };
+    }
+}
+
+/* ── CSV line parser (handles quoted fields, supports comma or semicolon delimiter) ── */
+function parseCsvLine(line: string, delimiter: string = ","): string[] {
+    const result: string[] = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuotes) {
+            if (ch === '"') {
+                if (i + 1 < line.length && line[i + 1] === '"') {
+                    current += '"';
+                    i++; // skip escaped quote
+                } else {
+                    inQuotes = false;
+                }
+            } else {
+                current += ch;
+            }
+        } else {
+            if (ch === '"') {
+                inQuotes = true;
+            } else if (ch === delimiter) {
+                result.push(current.trim());
+                current = "";
+            } else {
+                current += ch;
+            }
+        }
+    }
+    result.push(current.trim());
+    return result;
+}
+
+/* ── Flexible date parser: DD/MM/YYYY or YYYY-MM-DD ── */
+function parseFlexibleDate(raw: string): Date | null {
+    // Try DD/MM/YYYY
+    const ddmmyyyy = raw.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
+    if (ddmmyyyy) {
+        const [, d, m, y] = ddmmyyyy;
+        const date = new Date(Number(y), Number(m) - 1, Number(d));
+        if (!isNaN(date.getTime())) return date;
+    }
+
+    // Try YYYY-MM-DD
+    const yyyymmdd = raw.match(/^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$/);
+    if (yyyymmdd) {
+        const [, y, m, d] = yyyymmdd;
+        const date = new Date(Number(y), Number(m) - 1, Number(d));
+        if (!isNaN(date.getTime())) return date;
+    }
+
+    return null;
 }
