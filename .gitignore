@@ -30,8 +30,15 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files — keep .env.example for reference
+.env
+.env.*
+!.env.example
+
+# user-uploaded files (D-Drive, transaction attachments, avatars)
+/storage/
+/public/uploads/
+/public/avatars/
 
 # vercel
 .vercel
