@@ -16,6 +16,8 @@ import {
     ChevronRight,
     ChevronsLeft,
     ChevronsRight,
+    Download,
+    Upload,
 } from "lucide-react";
 import { showToast } from "@/lib/show-toast";
 
@@ -60,6 +62,7 @@ import type { ItemWithRkap } from "@/lib/items-rkap/schemas";
 
 import AddItemRkapDialog from "./AddItemRkapDialog";
 import EditItemRkapDialog from "./EditItemRkapDialog";
+import ImportCsvDialog from "./ImportCsvDialog";
 import { deleteItemsAction } from "../actions";
 
 /* ── Constants ── */
@@ -88,6 +91,7 @@ export default function ItemsRkapClient({
         null,
     );
     const [isDeleting, setIsDeleting] = React.useState(false);
+    const [importDialogOpen, setImportDialogOpen] = React.useState(false);
     const [currentPage, setCurrentPage] = React.useState(1);
     const [pageSize, setPageSize] = React.useState<number>(10);
 
@@ -213,6 +217,46 @@ export default function ItemsRkapClient({
         });
     }
 
+    /* ── Download Template CSV ── */
+    function handleDownloadTemplate() {
+        const headers = "rkap,items";
+        const example = '"Nama RKAP","Item A;Item B;Item C"';
+        const csv = `${headers}\n${example}\n`;
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "template_items_rkap.csv";
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
+    /* ── Export Data CSV ── */
+    function handleExportCsv() {
+        if (filteredData.length === 0) return;
+
+        const headers = "rkap,items";
+        const rows = filteredData.map((item) => {
+            const rkap = item.rkapName ?? "";
+            const name = item.name;
+            // Escape fields containing commas or quotes
+            const escField = (v: string) =>
+                v.includes(",") || v.includes('"')
+                    ? `"${v.replace(/"/g, '""')}"`
+                    : v;
+            return `${escField(rkap)},${escField(name)}`;
+        });
+
+        const csv = [headers, ...rows].join("\n") + "\n";
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `items_rkap_export.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
     const hasActiveFilter = !!searchQuery;
     const startRow =
         filteredData.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
@@ -245,7 +289,7 @@ export default function ItemsRkapClient({
                             </CardDescription>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                             {selectedIds.size > 0 && (
                                 <Button
                                     variant="destructive"
@@ -257,6 +301,31 @@ export default function ItemsRkapClient({
                                     Hapus ({selectedIds.size})
                                 </Button>
                             )}
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleExportCsv}
+                                disabled={filteredData.length === 0}
+                            >
+                                <Download className="size-4" />
+                                Export CSV
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleDownloadTemplate}
+                            >
+                                <Download className="size-4" />
+                                Template CSV
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setImportDialogOpen(true)}
+                            >
+                                <Upload className="size-4" />
+                                Import CSV
+                            </Button>
                             <Button
                                 size="sm"
                                 onClick={() => setAddDialogOpen(true)}
@@ -588,6 +657,10 @@ export default function ItemsRkapClient({
                 onOpenChange={setEditDialogOpen}
                 item={editingItem}
                 rkapOptions={rkapOptions}
+            />
+            <ImportCsvDialog
+                open={importDialogOpen}
+                onOpenChange={setImportDialogOpen}
             />
         </>
     );
