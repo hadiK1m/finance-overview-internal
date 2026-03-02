@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/incompatible-library */
 "use client";
 
 import { useState, useMemo } from "react";
@@ -13,7 +14,26 @@ import {
     FileBarChart,
     Receipt,
     CalendarDays,
+    ArrowUpDown,
+    ArrowUp,
+    ArrowDown,
+    ChevronLeft,
+    ChevronRight,
+    ChevronsLeft,
+    ChevronsRight,
 } from "lucide-react";
+import { format } from "date-fns";
+import { id as idLocale } from "date-fns/locale";
+import type { DateRange } from "react-day-picker";
+import {
+    useReactTable,
+    getCoreRowModel,
+    getSortedRowModel,
+    getPaginationRowModel,
+    flexRender,
+    type SortingState,
+    type ColumnDef,
+} from "@tanstack/react-table";
 
 import {
     Card,
@@ -40,6 +60,12 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 import { cn, formatRupiah } from "@/lib/utils";
 
 /* ──────────────────────────────────────────────
@@ -72,12 +98,14 @@ export interface PrevMonthAggregate {
 export interface DashboardData {
     /** All balance sheet records (sorted newest first) */
     balanceSheets: BalanceSheetOption[];
-    /** ALL transactions for current month — client filters by selected account */
-    currentMonthTransactions: MonthTransaction[];
+    /** ALL transactions for current year — client filters by date range + account */
+    allTransactions: MonthTransaction[];
     /** Previous month income/expense per account (excluding Cash Advanced) */
     prevMonthAggregates: PrevMonthAggregate[];
     /** Current month label e.g. "Februari 2026" */
     currentMonth: string;
+    /** Current year number e.g. 2026 */
+    currentYear: number;
 }
 
 /* ──────────────────────────────────────────────
@@ -100,11 +128,13 @@ function trendPct(current: number, previous: number): string | null {
    ══════════════════════════════════════════════ */
 
 export default function DashboardClient({ data }: { data: DashboardData }) {
+    "use no memo";
     const {
         balanceSheets: bsOptions,
-        currentMonthTransactions,
+        allTransactions,
         prevMonthAggregates,
         currentMonth,
+        currentYear,
     } = data;
 
     // Default to most recent balance sheet (first in array)
@@ -112,40 +142,66 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
         bsOptions[0]?.id ?? "",
     );
 
+    // Date range filter — defaults to start of year → end of year
+    const [dateRange, setDateRange] = useState<DateRange | undefined>({
+        from: new Date(currentYear, 0, 1),
+        to: new Date(currentYear, 11, 31),
+    });
+
+    // Table sorting state
+    const [sorting, setSorting] = useState<SortingState>([]);
+
     const selectedBs = useMemo(
         () => bsOptions.find((bs) => bs.id === selectedBsId),
         [bsOptions, selectedBsId],
     );
     const totalBalance = selectedBs?.balance ?? 0;
 
-    /* ── Filter transactions by selected account ── */
+    /* ── Filter transactions by selected account + date range ── */
     const filtered = useMemo(() => {
-        if (!selectedBs) return currentMonthTransactions;
-        return currentMonthTransactions.filter(
-            (tx) => tx.accountName === selectedBs.name,
-        );
-    }, [selectedBs, currentMonthTransactions]);
+        let result = allTransactions;
+
+        // Filter by selected account
+        if (selectedBs) {
+            result = result.filter(
+                (tx) => tx.accountName === selectedBs.name,
+            );
+        }
+
+        // Filter by date range
+        if (dateRange?.from) {
+            const from = new Date(dateRange.from);
+            from.setHours(0, 0, 0, 0);
+            result = result.filter((tx) => new Date(tx.date) >= from);
+        }
+        if (dateRange?.to) {
+            const to = new Date(dateRange.to);
+            to.setHours(23, 59, 59, 999);
+            result = result.filter((tx) => new Date(tx.date) <= to);
+        }
+
+        return result;
+    }, [selectedBs, allTransactions, dateRange]);
 
     /* ── Compute aggregates from filtered transactions ── */
-    const { incomeMTD, expenseMTD, cashAdvancedTotal } = useMemo(() => {
+    const { incomeMTD, expenseMTD, cashAdvancedIn, cashAdvancedOut } = useMemo(() => {
         let income = 0;
         let expense = 0;
-        let cashAdv = 0;
+        let caIn = 0;
+        let caOut = 0;
 
         for (const tx of filtered) {
             if (isCashAdvanced(tx.rkapName)) {
-                if (tx.type === "income") cashAdv += tx.amount;
-                continue; // exclude from income/expense
+                if (tx.type === "income") caIn += tx.amount;
+                else caOut += tx.amount;
+                continue;
             }
             if (tx.type === "income") income += tx.amount;
             else expense += tx.amount;
         }
 
-        return { incomeMTD: income, expenseMTD: expense, cashAdvancedTotal: cashAdv };
+        return { incomeMTD: income, expenseMTD: expense, cashAdvancedIn: caIn, cashAdvancedOut: caOut };
     }, [filtered]);
-
-    /* ── Recent 7 transactions from filtered set ── */
-    const recentTransactions = useMemo(() => filtered.slice(0, 7), [filtered]);
 
     /* ── Previous month trend for selected account ── */
     const prevAgg = useMemo(() => {
@@ -160,6 +216,181 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
     const incomeTrend = trendPct(incomeMTD, prevAgg.income);
     const expenseTrend = trendPct(expenseMTD, prevAgg.expense);
 
+    /* ── Human-readable date range label ── */
+    const dateRangeLabel = useMemo(() => {
+        if (!dateRange?.from) return "Semua Periode";
+        const from = format(dateRange.from, "d MMM", { locale: idLocale });
+        if (!dateRange.to) return `Sejak ${from}`;
+        const to = format(dateRange.to, "d MMM yyyy", { locale: idLocale });
+        // Check if range covers exactly Jan 1 – Dec 31 of the same year
+        const f = dateRange.from;
+        const t = dateRange.to;
+        if (
+            f.getMonth() === 0 &&
+            f.getDate() === 1 &&
+            t.getMonth() === 11 &&
+            t.getDate() === 31 &&
+            f.getFullYear() === t.getFullYear()
+        ) {
+            return `Tahun ${f.getFullYear()}`;
+        }
+        return `${from} – ${to}`;
+    }, [dateRange]);
+
+    /* ── Table column definitions ── */
+    const columns = useMemo<ColumnDef<MonthTransaction>[]>(
+        () => [
+            {
+                accessorKey: "date",
+                header: ({ column }) => (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="-ml-3 h-8 font-medium"
+                        onClick={() =>
+                            column.toggleSorting(column.getIsSorted() === "asc")
+                        }
+                    >
+                        Tanggal
+                        {column.getIsSorted() === "asc" ? (
+                            <ArrowUp className="ml-1 size-3.5" />
+                        ) : column.getIsSorted() === "desc" ? (
+                            <ArrowDown className="ml-1 size-3.5" />
+                        ) : (
+                            <ArrowUpDown className="ml-1 size-3.5 text-muted-foreground/50" />
+                        )}
+                    </Button>
+                ),
+                cell: ({ row }) =>
+                    new Date(row.getValue("date")).toLocaleDateString("id-ID", {
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                    }),
+                sortingFn: (a, b) =>
+                    new Date(a.getValue("date")).getTime() -
+                    new Date(b.getValue("date")).getTime(),
+            },
+            {
+                accessorKey: "recipientName",
+                header: ({ column }) => (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="-ml-3 h-8 font-medium"
+                        onClick={() =>
+                            column.toggleSorting(column.getIsSorted() === "asc")
+                        }
+                    >
+                        Deskripsi
+                        {column.getIsSorted() === "asc" ? (
+                            <ArrowUp className="ml-1 size-3.5" />
+                        ) : column.getIsSorted() === "desc" ? (
+                            <ArrowDown className="ml-1 size-3.5" />
+                        ) : (
+                            <ArrowUpDown className="ml-1 size-3.5 text-muted-foreground/50" />
+                        )}
+                    </Button>
+                ),
+                cell: ({ row }) => (
+                    <span className="font-medium">
+                        {row.getValue("recipientName")}
+                    </span>
+                ),
+            },
+            {
+                accessorKey: "rkapName",
+                header: "RKAP",
+                cell: ({ row }) => {
+                    const name: string = row.getValue("rkapName");
+                    const isCa = isCashAdvanced(name);
+                    return (
+                        <Badge
+                            variant={isCa ? "outline" : "secondary"}
+                            className={cn(
+                                "text-xs font-normal",
+                                isCa && "border-violet-300 text-violet-600",
+                            )}
+                        >
+                            {name}
+                        </Badge>
+                    );
+                },
+                meta: { className: "hidden sm:table-cell" },
+            },
+            {
+                accessorKey: "amount",
+                header: ({ column }) => (
+                    <div className="text-right">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="-mr-3 h-8 font-medium"
+                            onClick={() =>
+                                column.toggleSorting(
+                                    column.getIsSorted() === "asc",
+                                )
+                            }
+                        >
+                            Jumlah
+                            {column.getIsSorted() === "asc" ? (
+                                <ArrowUp className="ml-1 size-3.5" />
+                            ) : column.getIsSorted() === "desc" ? (
+                                <ArrowDown className="ml-1 size-3.5" />
+                            ) : (
+                                <ArrowUpDown className="ml-1 size-3.5 text-muted-foreground/50" />
+                            )}
+                        </Button>
+                    </div>
+                ),
+                cell: ({ row }) => {
+                    const txn = row.original;
+                    const isCa = isCashAdvanced(txn.rkapName);
+                    let colorClass = "text-muted-foreground";
+                    let prefix = "";
+                    if (isCa) {
+                        colorClass = "text-violet-600";
+                        prefix = "⇄ ";
+                    } else if (txn.type === "income") {
+                        colorClass = "text-emerald-600";
+                        prefix = "+";
+                    } else {
+                        colorClass = "text-red-500";
+                        prefix = "−";
+                    }
+                    return (
+                        <div
+                            className={cn(
+                                "text-right font-semibold tabular-nums",
+                                colorClass,
+                            )}
+                        >
+                            {prefix}
+                            {formatRupiah(txn.amount)}
+                        </div>
+                    );
+                },
+                sortingFn: (a, b) =>
+                    Number(a.getValue("amount")) - Number(b.getValue("amount")),
+            },
+        ],
+        [],
+    );
+
+    /* ── React Table instance ── */
+    const table = useReactTable({
+        data: filtered,
+        columns,
+        state: { sorting },
+        onSortingChange: setSorting,
+        getCoreRowModel: getCoreRowModel(),
+        getSortedRowModel: getSortedRowModel(),
+        getPaginationRowModel: getPaginationRowModel(),
+        initialState: {
+            pagination: { pageSize: 10 },
+        },
+    });
+
     /* ── Summary cards ── */
     const summaryCards = [
         {
@@ -173,7 +404,7 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
                 : "Tidak ada data",
         },
         {
-            title: "Income (MTD)",
+            title: `Income (${dateRangeLabel})`,
             value: incomeMTD,
             icon: ArrowUpRight,
             iconColor: "text-emerald-600",
@@ -182,21 +413,21 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
             trendUp: incomeMTD >= prevAgg.income,
         },
         {
-            title: "Expense (MTD)",
+            title: `Expense (${dateRangeLabel})`,
             value: expenseMTD,
             icon: ArrowDownRight,
             iconColor: "text-red-500",
             iconBg: "bg-red-50",
             trend: expenseTrend,
-            trendUp: expenseMTD <= prevAgg.expense, // less expense = good
+            trendUp: expenseMTD <= prevAgg.expense,
         },
         {
             title: "Pemindahan Saldo Antar Akun",
-            value: cashAdvancedTotal,
+            value: cashAdvancedIn + cashAdvancedOut,
             icon: ArrowLeftRight,
             iconColor: "text-violet-600",
             iconBg: "bg-violet-50",
-            trend: "Total Cash Advanced (non-expense)",
+            trend: `Masuk ${formatRupiah(cashAdvancedIn)} · Keluar ${formatRupiah(cashAdvancedOut)}`,
         },
     ];
 
@@ -219,10 +450,61 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
                     </p>
                 </div>
 
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <CalendarDays className="size-3.5" />
-                    <span>Updated just now</span>
-                </div>
+                <Popover>
+                    <PopoverTrigger asChild>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className={cn(
+                                "h-9 gap-2 text-xs font-normal",
+                                !dateRange && "text-muted-foreground",
+                            )}
+                        >
+                            <CalendarDays className="size-3.5" />
+                            {dateRange?.from ? (
+                                dateRange.to ? (
+                                    <>
+                                        {format(dateRange.from, "d MMM", {
+                                            locale: idLocale,
+                                        })}
+                                        {" – "}
+                                        {format(dateRange.to, "d MMM yyyy", {
+                                            locale: idLocale,
+                                        })}
+                                    </>
+                                ) : (
+                                    format(dateRange.from, "d MMM yyyy", {
+                                        locale: idLocale,
+                                    })
+                                )
+                            ) : (
+                                "Filter Tanggal"
+                            )}
+                        </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="end">
+                        <Calendar
+                            mode="range"
+                            defaultMonth={dateRange?.from ?? new Date()}
+                            selected={dateRange}
+                            onSelect={setDateRange}
+                            numberOfMonths={2}
+                            locale={idLocale}
+                        />
+                        {dateRange?.from && (
+                            <div className="border-t px-4 py-3">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="w-full text-xs"
+                                    onClick={() => setDateRange(undefined)}
+                                >
+                                    Reset Filter
+                                </Button>
+                            </div>
+                        )}
+                    </PopoverContent>
+                </Popover>
             </div>
 
             {/* ── Balance Sheet selector ── */}
@@ -322,8 +604,7 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
                                     Transaksi Terbaru
                                 </CardTitle>
                                 <CardDescription>
-                                    {recentTransactions.length} transaksi
-                                    terakhir bulan ini
+                                    {filtered.length} transaksi ditemukan
                                 </CardDescription>
                             </div>
                             <Button variant="outline" size="sm" asChild>
@@ -333,92 +614,199 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
                     </CardHeader>
 
                     <CardContent>
-                        {recentTransactions.length === 0 ? (
+                        {filtered.length === 0 ? (
                             <p className="py-8 text-center text-sm text-muted-foreground">
-                                Belum ada transaksi bulan ini.
+                                Belum ada transaksi pada rentang tanggal ini.
                             </p>
                         ) : (
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="w-25">
-                                            Tanggal
-                                        </TableHead>
-                                        <TableHead>Deskripsi</TableHead>
-                                        <TableHead className="hidden sm:table-cell">
-                                            RKAP
-                                        </TableHead>
-                                        <TableHead className="text-right">
-                                            Jumlah
-                                        </TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {recentTransactions.map((txn) => {
-                                        const isCa = isCashAdvanced(
-                                            txn.rkapName,
-                                        );
-                                        let colorClass =
-                                            "text-muted-foreground";
-                                        let prefix = "";
-                                        if (isCa) {
-                                            colorClass = "text-violet-600";
-                                            prefix = "⇄ ";
-                                        } else if (txn.type === "income") {
-                                            colorClass = "text-emerald-600";
-                                            prefix = "+";
-                                        } else {
-                                            colorClass = "text-red-500";
-                                            prefix = "−";
-                                        }
-
-                                        return (
-                                            <TableRow key={txn.id}>
-                                                <TableCell className="text-xs text-muted-foreground">
-                                                    {new Date(
-                                                        txn.date,
-                                                    ).toLocaleDateString(
-                                                        "id-ID",
-                                                        {
-                                                            day: "numeric",
-                                                            month: "short",
-                                                            year: "numeric",
-                                                        },
-                                                    )}
-                                                </TableCell>
-                                                <TableCell className="font-medium">
-                                                    {txn.recipientName}
-                                                </TableCell>
-                                                <TableCell className="hidden sm:table-cell">
-                                                    <Badge
-                                                        variant={
-                                                            isCa
-                                                                ? "outline"
-                                                                : "secondary"
-                                                        }
-                                                        className={cn(
-                                                            "text-xs font-normal",
-                                                            isCa &&
-                                                            "border-violet-300 text-violet-600",
-                                                        )}
+                            <div className="space-y-4">
+                                <div className="rounded-md border">
+                                    <Table>
+                                        <TableHeader>
+                                            {table
+                                                .getHeaderGroups()
+                                                .map((headerGroup) => (
+                                                    <TableRow
+                                                        key={headerGroup.id}
                                                     >
-                                                        {txn.rkapName}
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell
-                                                    className={cn(
-                                                        "text-right font-semibold tabular-nums",
-                                                        colorClass,
-                                                    )}
-                                                >
-                                                    {prefix}
-                                                    {formatRupiah(txn.amount)}
-                                                </TableCell>
-                                            </TableRow>
-                                        );
-                                    })}
-                                </TableBody>
-                            </Table>
+                                                        {headerGroup.headers.map(
+                                                            (header) => (
+                                                                <TableHead
+                                                                    key={
+                                                                        header.id
+                                                                    }
+                                                                    className={cn(
+                                                                        (
+                                                                            header
+                                                                                .column
+                                                                                .columnDef
+                                                                                .meta as {
+                                                                                    className?: string;
+                                                                                }
+                                                                        )
+                                                                            ?.className,
+                                                                    )}
+                                                                >
+                                                                    {header.isPlaceholder
+                                                                        ? null
+                                                                        : flexRender(
+                                                                            header
+                                                                                .column
+                                                                                .columnDef
+                                                                                .header,
+                                                                            header.getContext(),
+                                                                        )}
+                                                                </TableHead>
+                                                            ),
+                                                        )}
+                                                    </TableRow>
+                                                ))}
+                                        </TableHeader>
+                                        <TableBody>
+                                            {table
+                                                .getRowModel()
+                                                .rows.map((row) => (
+                                                    <TableRow key={row.id}>
+                                                        {row
+                                                            .getVisibleCells()
+                                                            .map((cell) => (
+                                                                <TableCell
+                                                                    key={
+                                                                        cell.id
+                                                                    }
+                                                                    className={cn(
+                                                                        (
+                                                                            cell
+                                                                                .column
+                                                                                .columnDef
+                                                                                .meta as {
+                                                                                    className?: string;
+                                                                                }
+                                                                        )
+                                                                            ?.className,
+                                                                    )}
+                                                                >
+                                                                    {flexRender(
+                                                                        cell
+                                                                            .column
+                                                                            .columnDef
+                                                                            .cell,
+                                                                        cell.getContext(),
+                                                                    )}
+                                                                </TableCell>
+                                                            ))}
+                                                    </TableRow>
+                                                ))}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+
+                                {/* Pagination controls */}
+                                <div className="flex items-center justify-between px-2">
+                                    <p className="text-xs text-muted-foreground">
+                                        Halaman{" "}
+                                        {table.getState().pagination
+                                            .pageIndex + 1}{" "}
+                                        dari {table.getPageCount()}
+                                    </p>
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1">
+                                            <Button
+                                                variant="outline"
+                                                size="icon"
+                                                className="size-8"
+                                                onClick={() =>
+                                                    table.setPageIndex(0)
+                                                }
+                                                disabled={
+                                                    !table.getCanPreviousPage()
+                                                }
+                                            >
+                                                <ChevronsLeft className="size-4" />
+                                                <span className="sr-only">
+                                                    First
+                                                </span>
+                                            </Button>
+                                            <Button
+                                                variant="outline"
+                                                size="icon"
+                                                className="size-8"
+                                                onClick={() =>
+                                                    table.previousPage()
+                                                }
+                                                disabled={
+                                                    !table.getCanPreviousPage()
+                                                }
+                                            >
+                                                <ChevronLeft className="size-4" />
+                                                <span className="sr-only">
+                                                    Previous
+                                                </span>
+                                            </Button>
+                                            <Button
+                                                variant="outline"
+                                                size="icon"
+                                                className="size-8"
+                                                onClick={() =>
+                                                    table.nextPage()
+                                                }
+                                                disabled={
+                                                    !table.getCanNextPage()
+                                                }
+                                            >
+                                                <ChevronRight className="size-4" />
+                                                <span className="sr-only">
+                                                    Next
+                                                </span>
+                                            </Button>
+                                            <Button
+                                                variant="outline"
+                                                size="icon"
+                                                className="size-8"
+                                                onClick={() =>
+                                                    table.setPageIndex(
+                                                        table.getPageCount() -
+                                                        1,
+                                                    )
+                                                }
+                                                disabled={
+                                                    !table.getCanNextPage()
+                                                }
+                                            >
+                                                <ChevronsRight className="size-4" />
+                                                <span className="sr-only">
+                                                    Last
+                                                </span>
+                                            </Button>
+                                        </div>
+                                        <Select
+                                            value={String(
+                                                table.getState().pagination
+                                                    .pageSize,
+                                            )}
+                                            onValueChange={(val) =>
+                                                table.setPageSize(Number(val))
+                                            }
+                                        >
+                                            <SelectTrigger className="h-8 w-17.5">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {[5, 10, 20, 50].map(
+                                                    (size) => (
+                                                        <SelectItem
+                                                            key={size}
+                                                            value={String(size)}
+                                                        >
+                                                            {size}
+                                                        </SelectItem>
+                                                    ),
+                                                )}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                            </div>
                         )}
                     </CardContent>
                 </Card>
@@ -471,10 +859,10 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
                     <Card>
                         <CardHeader>
                             <CardTitle className="text-base">
-                                Budget Bulan Ini
+                                Ringkasan Anggaran
                             </CardTitle>
                             <CardDescription>
-                                Pemakaian anggaran {currentMonth}
+                                Pemakaian anggaran {dateRangeLabel}
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
