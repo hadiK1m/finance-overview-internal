@@ -125,6 +125,7 @@ export async function addTransactionAction(
 
         revalidatePath("/transactions");
         revalidatePath("/cash-balance");
+        revalidatePath("/dashboard");
         return { success: true, error: null };
     } catch (error) {
         console.error("[addTransactionAction] Error:", error);
@@ -196,6 +197,7 @@ export async function deleteTransactionsAction(
 
         revalidatePath("/transactions");
         revalidatePath("/cash-balance");
+        revalidatePath("/dashboard");
         return { success: true, error: null };
     } catch (error) {
         console.error("[deleteTransactionsAction] Error:", error);
@@ -337,6 +339,7 @@ export async function editTransactionAction(
 
         revalidatePath("/transactions");
         revalidatePath("/cash-balance");
+        revalidatePath("/dashboard");
         return { success: true, error: null };
     } catch (error) {
         console.error("[editTransactionAction] Error:", error);
@@ -424,6 +427,7 @@ export async function importTransactionsCsvAction(
 
         const allAccounts = await db.select({ name: balanceSheets.name }).from(balanceSheets);
         const accountSet = new Set(allAccounts.map((a) => a.name.toLowerCase()));
+        const accountNameMap = new Map(allAccounts.map((a) => [a.name.toLowerCase(), a.name]));
 
         // Parse data rows
         const rowErrors: string[] = [];
@@ -527,7 +531,7 @@ export async function importTransactionsCsvAction(
                 recipientName: rawPenerima,
                 amount,
                 type: mappedTipe,
-                accountName: rawSumberDana,
+                accountName: accountNameMap.get(rawSumberDana.toLowerCase()) ?? rawSumberDana,
             });
         }
 
@@ -580,6 +584,7 @@ export async function importTransactionsCsvAction(
 
         revalidatePath("/transactions");
         revalidatePath("/cash-balance");
+        revalidatePath("/dashboard");
 
         return {
             success: true,

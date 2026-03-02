@@ -31,13 +31,8 @@ export default async function DashboardPage() {
     });
 
     /* ── Date boundaries ── */
-    // Full year for main transaction list
-    const yearStart = new Date(now.getFullYear(), 0, 1);
-    const yearEnd = new Date(now.getFullYear() + 1, 0, 1);
-
     // Current month (for trend comparison base)
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
     const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const prevMonthEnd = monthStart;
@@ -63,7 +58,7 @@ export default async function DashboardPage() {
     }));
 
     /* ═══════════════════════════════════════════════════
-       2. ALL current-year transactions (client filters by date + account)
+       2. ALL transactions (client filters by date range + account)
        ═══════════════════════════════════════════════════ */
     const txRows = await db
         .select({
@@ -77,12 +72,6 @@ export default async function DashboardPage() {
         })
         .from(transactions)
         .leftJoin(rkapNames, eq(transactions.rkapId, rkapNames.id))
-        .where(
-            and(
-                gte(transactions.date, yearStart),
-                lt(transactions.date, yearEnd),
-            ),
-        )
         .orderBy(desc(transactions.date), desc(transactions.createdAt));
 
     const allTransactions: MonthTransaction[] = txRows.map((r) => ({

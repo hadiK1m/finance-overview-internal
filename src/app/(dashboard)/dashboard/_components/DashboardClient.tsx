@@ -161,10 +161,11 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
     const filtered = useMemo(() => {
         let result = allTransactions;
 
-        // Filter by selected account
+        // Filter by selected account (case-insensitive to handle legacy data)
         if (selectedBs) {
+            const accountLower = selectedBs.name.toLowerCase();
             result = result.filter(
-                (tx) => tx.accountName === selectedBs.name,
+                (tx) => tx.accountName.toLowerCase() === accountLower,
             );
         }
 
@@ -206,9 +207,10 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
     /* ── Previous month trend for selected account ── */
     const prevAgg = useMemo(() => {
         if (!selectedBs) return { income: 0, expense: 0 };
+        const accountLower = selectedBs.name.toLowerCase();
         return (
             prevMonthAggregates.find(
-                (a) => a.accountName === selectedBs.name,
+                (a) => a.accountName.toLowerCase() === accountLower,
             ) ?? { income: 0, expense: 0 }
         );
     }, [selectedBs, prevMonthAggregates]);
