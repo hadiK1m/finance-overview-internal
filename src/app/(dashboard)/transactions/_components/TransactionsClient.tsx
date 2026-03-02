@@ -249,17 +249,76 @@ export default function TransactionsClient({
 
     /* ── Download Template CSV ── */
     function handleDownloadTemplate() {
-        const headers = "tanggal,rkap,items,penerima,jumlah,tipe,sumber_dana";
-        const example =
-            '01/01/2025,Nama RKAP,"Item A;Item B",Nama Penerima,1500000,pengeluaran,Nama Rekening';
-        const csv = `${headers}\n${example}\n`;
-        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const headers = "tanggal;rkap;items;penerima;jumlah;tipe;sumber_dana";
+        const example1 =
+            "01/01/2026;Cash Advanced;Alat & Keperluan Kantor;Hadi Nurhakim;1500000;pengeluaran;BANK";
+        const example2 =
+            "15/06/2026;Biaya Operasional;ATK;PT Sumber Jaya;2500000;pemasukan;KAS";
+        const csv = `${headers}\n${example1}\n${example2}\n`;
+        const BOM = "\uFEFF";
+        const blob = new Blob([BOM + csv], {
+            type: "text/csv;charset=utf-8;",
+        });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
         link.download = "template_transaksi.csv";
         link.click();
         URL.revokeObjectURL(url);
+    }
+
+    /* ── Export CSV dari data yang di-select ── */
+    function handleExportCsv() {
+        const selectedTxs = data.filter((tx) => selectedIds.has(tx.id));
+        if (selectedTxs.length === 0) return;
+
+        // Header sesuai template import CSV (delimiter: semicolon)
+        const headers = [
+            "tanggal",
+            "rkap",
+            "items",
+            "penerima",
+            "jumlah",
+            "tipe",
+            "sumber_dana",
+        ];
+
+        const escCsv = (val: string) => {
+            if (val.includes('"') || val.includes(";") || val.includes("\n")) {
+                return `"${val.replace(/"/g, '""')}"`;
+            }
+            return val;
+        };
+
+        const rows = selectedTxs.map((tx) => [
+            format(new Date(tx.date), "dd/MM/yyyy"),
+            tx.rkapName ?? "",
+            tx.items.map((it) => it.name).join(";"),
+            tx.recipientName,
+            String(Number(tx.amount)),
+            tx.type === "income" ? "pemasukan" : "pengeluaran",
+            tx.accountName,
+        ]);
+
+        const csvContent = [
+            headers.join(";"),
+            ...rows.map((row) => row.map(escCsv).join(";")),
+        ].join("\n");
+
+        const BOM = "\uFEFF";
+        const blob = new Blob([BOM + csvContent], {
+            type: "text/csv;charset=utf-8;",
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `transaksi_export_${format(new Date(), "yyyyMMdd_HHmmss")}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+
+        showToast.success(
+            `${selectedTxs.length} transaksi berhasil di-export`,
+        );
     }
 
     /* ── Edit ── */
@@ -326,15 +385,25 @@ export default function TransactionsClient({
 
                         <div className="flex flex-wrap items-center gap-2">
                             {selectedIds.size > 0 && (
-                                <Button
-                                    variant="destructive"
-                                    size="sm"
-                                    disabled={isDeleting}
-                                    onClick={handleBatchDelete}
-                                >
-                                    <Trash2 className="size-4" />
-                                    Hapus ({selectedIds.size})
-                                </Button>
+                                <>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={handleExportCsv}
+                                    >
+                                        <Download className="size-4" />
+                                        Export CSV ({selectedIds.size})
+                                    </Button>
+                                    <Button
+                                        variant="destructive"
+                                        size="sm"
+                                        disabled={isDeleting}
+                                        onClick={handleBatchDelete}
+                                    >
+                                        <Trash2 className="size-4" />
+                                        Hapus ({selectedIds.size})
+                                    </Button>
+                                </>
                             )}
                             <Button
                                 variant="outline"
