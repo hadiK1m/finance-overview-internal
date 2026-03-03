@@ -60,3 +60,21 @@ export const editTransactionSchema = z.object({
 });
 
 export type EditTransactionValues = z.infer<typeof editTransactionSchema>;
+
+/* ─────────────── Pemindahan Saldo ─────────────── */
+
+export const transferBalanceSchema = z
+    .object({
+        date: z.date(),
+        itemIds: z.array(z.string()).min(1, "Minimal satu item harus dipilih"),
+        fromAccountName: z.string().min(1, "Akun sumber wajib dipilih"),
+        toAccountName: z.string().min(1, "Akun tujuan wajib dipilih"),
+        amount: z.number().gt(0, "Jumlah harus lebih dari 0"),
+        description: z.string().min(1, "Keterangan wajib diisi"),
+    })
+    .refine((val) => val.fromAccountName !== val.toAccountName, {
+        message: "Akun sumber dan tujuan tidak boleh sama",
+        path: ["toAccountName"],
+    });
+
+export type TransferBalanceValues = z.infer<typeof transferBalanceSchema>;

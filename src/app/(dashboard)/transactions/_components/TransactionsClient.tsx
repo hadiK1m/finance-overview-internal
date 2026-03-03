@@ -76,6 +76,7 @@ import type {
 import AddTransactionDialog from "./AddTransactionDialog";
 import EditTransactionDialog from "./EditTransactionDialog";
 import ImportCsvDialog from "./ImportCsvDialog";
+import TransferBalanceDialog from "./TransferBalanceDialog";
 import { deleteTransactionsAction } from "../actions";
 
 /* ── Constants ── */
@@ -108,6 +109,7 @@ export default function TransactionsClient({
     const [currentPage, setCurrentPage] = React.useState(1);
     const [pageSize, setPageSize] = React.useState<number>(10);
     const [importDialogOpen, setImportDialogOpen] = React.useState(false);
+    const [transferDialogOpen, setTransferDialogOpen] = React.useState(false);
 
     /* ══════════════════════════════════════════════
        Filter
@@ -420,6 +422,15 @@ export default function TransactionsClient({
                             >
                                 <Upload className="size-4" />
                                 Import CSV
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-sky-200 text-sky-600 hover:bg-sky-50 hover:text-sky-700"
+                                onClick={() => setTransferDialogOpen(true)}
+                            >
+                                <ArrowLeftRight className="size-4" />
+                                Pemindahan Saldo
                             </Button>
                             <Button
                                 size="sm"
@@ -913,6 +924,12 @@ export default function TransactionsClient({
             <ImportCsvDialog
                 open={importDialogOpen}
                 onOpenChange={setImportDialogOpen}
+            />
+            <TransferBalanceDialog
+                open={transferDialogOpen}
+                onOpenChange={setTransferDialogOpen}
+                accountOptions={accountOptions}
+                itemOptions={itemOptions}
             />
         </>
     );

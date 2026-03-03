@@ -9,6 +9,7 @@ import { transactions, transactionItems, balanceSheets, items, rkapNames } from 
 import {
     addTransactionSchema,
     editTransactionSchema,
+    transferBalanceSchema,
 } from "@/lib/transactions/schemas";
 import { requirePermission } from "@/lib/auth/config";
 import { z } from "zod/v4";
@@ -652,4 +653,155 @@ function parseFlexibleDate(raw: string): Date | null {
     }
 
     return null;
+}
+/* ══════════════════════════════════════════════
+   Pemindahan Saldo Antar Akun
+   ──────────────────────────────────────────────
+   Creates TWO transactions:
+   1. expense from source account (balance -)
+   2. income to destination account (balance +)
+   Both under RKAP "Cash Advanced"
+   ══════════════════════════════════════════════ */
+
+export async function transferBalanceAction(
+    rawData: string,
+): Promise<ActionResult> {
+    try {
+        const parsed = transferBalanceSchema.safeParse({
+            ...JSON.parse(rawData),
+            date: new Date(JSON.parse(rawData).date),
+        });
+
+        if (!parsed.success) {
+            return {
+                success: false,
+                error: "Data tidak valid. Periksa kembali input Anda.",
+            };
+        }
+
+        const user = await requirePermission("create");
+        const { date, itemIds, fromAccountName, toAccountName, amount, description } =
+            parsed.data;
+
+        // Lookup "Cash Advanced" RKAP
+        const [cashAdvancedRkap] = await db
+            .select({ id: rkapNames.id })
+            .from(rkapNames)
+            .where(sql`LOWER(${rkapNames.name}) = 'cash advanced'`);
+
+        if (!cashAdvancedRkap) {
+            return {
+                success: false,
+                error: 'RKAP "Cash Advanced" tidak ditemukan di database. Silakan buat terlebih dahulu.',
+            };
+        }
+
+        // Validate that selected items exist under Cash Advanced
+        const cashAdvancedItems = await db
+            .select({ id: items.id })
+            .from(items)
+            .where(eq(items.rkapId, cashAdvancedRkap.id));
+
+        const validItemIds = new Set(cashAdvancedItems.map((i) => i.id));
+        const invalidItems = itemIds.filter((id) => !validItemIds.has(id));
+        if (invalidItems.length > 0) {
+            return {
+                success: false,
+                error: 'Beberapa item yang dipilih tidak terdaftar di bawah RKAP "Cash Advanced".',
+            };
+        }
+
+        // Verify source account has enough balance
+        const [sourceAccount] = await db
+            .select({ balance: balanceSheets.balance })
+            .from(balanceSheets)
+            .where(eq(balanceSheets.name, fromAccountName));
+
+        if (!sourceAccount) {
+            return {
+                success: false,
+                error: `Akun sumber "${fromAccountName}" tidak ditemukan.`,
+            };
+        }
+
+        if (Number(sourceAccount.balance) < amount) {
+            return {
+                success: false,
+                error: `Saldo akun "${fromAccountName}" tidak mencukupi. Saldo: Rp ${Number(sourceAccount.balance).toLocaleString("id-ID")}`,
+            };
+        }
+
+        await db.transaction(async (trx) => {
+            // 1. Create EXPENSE transaction from source account
+            const [txOut] = await trx
+                .insert(transactions)
+                .values({
+                    date,
+                    rkapId: cashAdvancedRkap.id,
+                    recipientName: description,
+                    amount: String(amount),
+                    type: "expense",
+                    accountName: fromAccountName,
+                    createdBy: user.userId,
+                })
+                .returning();
+
+            // Insert transaction items for outgoing
+            await trx.insert(transactionItems).values(
+                itemIds.map((itemId) => ({
+                    transactionId: txOut.id,
+                    itemId,
+                })),
+            );
+
+            // Decrease source account balance
+            await trx
+                .update(balanceSheets)
+                .set({
+                    balance: sql`${balanceSheets.balance} - ${String(amount)}`,
+                })
+                .where(eq(balanceSheets.name, fromAccountName));
+
+            // 2. Create INCOME transaction to destination account
+            const [txIn] = await trx
+                .insert(transactions)
+                .values({
+                    date,
+                    rkapId: cashAdvancedRkap.id,
+                    recipientName: description,
+                    amount: String(amount),
+                    type: "income",
+                    accountName: toAccountName,
+                    createdBy: user.userId,
+                })
+                .returning();
+
+            // Insert transaction items for incoming
+            await trx.insert(transactionItems).values(
+                itemIds.map((itemId) => ({
+                    transactionId: txIn.id,
+                    itemId,
+                })),
+            );
+
+            // Increase destination account balance
+            await trx
+                .update(balanceSheets)
+                .set({
+                    balance: sql`${balanceSheets.balance} + ${String(amount)}`,
+                })
+                .where(eq(balanceSheets.name, toAccountName));
+        });
+
+        revalidatePath("/transactions");
+        revalidatePath("/cash-balance");
+        revalidatePath("/dashboard");
+        return { success: true, error: null };
+    } catch (error) {
+        console.error("[transferBalanceAction] Error:", error);
+        return {
+            success: false,
+            error: "Terjadi kesalahan saat memindahkan saldo.",
+        };
+    }
 }

@@ -311,7 +311,7 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
                             variant={isCa ? "outline" : "secondary"}
                             className={cn(
                                 "text-xs font-normal",
-                                isCa && "border-violet-300 text-violet-600",
+                                isCa && "border-sky-300 text-sky-600",
                             )}
                         >
                             {name}
@@ -351,7 +351,7 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
                     let colorClass = "text-muted-foreground";
                     let prefix = "";
                     if (isCa) {
-                        colorClass = "text-violet-600";
+                        colorClass = "text-sky-600";
                         prefix = "⇄ ";
                     } else if (txn.type === "income") {
                         colorClass = "text-emerald-600";
@@ -427,8 +427,8 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
             title: "Pemindahan Saldo Antar Akun",
             value: cashAdvancedIn + cashAdvancedOut,
             icon: ArrowLeftRight,
-            iconColor: "text-violet-600",
-            iconBg: "bg-violet-50",
+            iconColor: "text-sky-600",
+            iconBg: "bg-sky-50",
             trend: `Masuk ${formatRupiah(cashAdvancedIn)} · Keluar ${formatRupiah(cashAdvancedOut)}`,
         },
     ];
@@ -867,10 +867,10 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
                                 Pemakaian anggaran {dateRangeLabel}
                             </CardDescription>
                         </CardHeader>
-                        <CardContent className="space-y-4">
+                        <CardContent className="space-y-3">
                             {/* Progress bar */}
-                            <div className="space-y-2">
-                                <div className="flex items-center justify-between text-sm">
+                            <div className="space-y-1.5">
+                                <div className="flex items-center justify-between text-xs">
                                     <span className="text-muted-foreground">
                                         Terpakai
                                     </span>
@@ -884,7 +884,7 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
                                         %
                                     </span>
                                 </div>
-                                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                                     <div
                                         className="h-full rounded-full bg-blue-600 transition-all"
                                         style={{
@@ -904,20 +904,20 @@ export default function DashboardClient({ data }: { data: DashboardData }) {
 
                             <Separator />
 
-                            <div className="grid grid-cols-2 gap-3 text-center">
-                                <div>
-                                    <p className="text-lg font-bold text-emerald-600">
+                            <div className="grid grid-cols-2 gap-2 text-center">
+                                <div className="min-w-0">
+                                    <p className="truncate text-sm font-bold text-emerald-600" title={formatRupiah(incomeMTD)}>
                                         {formatRupiah(incomeMTD)}
                                     </p>
-                                    <p className="text-xs text-muted-foreground">
+                                    <p className="text-[10px] text-muted-foreground">
                                         Income
                                     </p>
                                 </div>
-                                <div>
-                                    <p className="text-lg font-bold text-red-500">
+                                <div className="min-w-0">
+                                    <p className="truncate text-sm font-bold text-red-500" title={formatRupiah(expenseMTD)}>
                                         {formatRupiah(expenseMTD)}
                                     </p>
-                                    <p className="text-xs text-muted-foreground">
+                                    <p className="text-[10px] text-muted-foreground">
                                         Expense
                                     </p>
                                 </div>
