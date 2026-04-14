@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1772002264173,
+      "tag": "0000_premium_the_professor",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1772004749088,
+      "tag": "0001_giant_kulan_gath",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772090606208,
+      "tag": "0002_glorious_hemingway",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1772099484586,
+      "tag": "0003_add_phone_bio_to_users",
+      "breakpoints": true
+    }
+  ]
+}
